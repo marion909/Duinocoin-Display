@@ -42,17 +42,28 @@ void setup() {
  Serial.begin(115200);        //Initialise UART COmmunication with 115200 bits/s Baud Rate
   WiFi.begin(ssid, password);
   Serial.println("Connecting");
-  while(WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
+
  ipsdisp.begin();             //Initiatise SPI Bus
  ipsdisp.init();              //Initialise ST7789
  ipsdisp.setRotation(1);      //Value 1 means landescape mode; Value 2 means potrait mode
  ipsdisp.setSwapBytes(true);  //Swap the byte order for pushImage() - corrects endianness
+
+ //wait for wlan
+
+  while(WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    ipsdisp.fillScreen(TFT_ORANGE);
+    ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
+    ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
+    ipsdisp.println("No WLAN! - Wifi is Connecting...");
+  }
+
+//boot screen
+
  ipsdisp.fillScreen(TFT_WHITE);
  ipsdisp.pushImage(40,0,240,240,myGraphic);
- delay(5000); 
+ delay(10000); 
  ipsdisp.fillScreen(TFT_ORANGE);
 }
 
@@ -159,11 +170,21 @@ Serial.print(F("Balance: "));
         }
       } else {
         Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+
+                  ipsdisp.fillScreen(TFT_ORANGE);
+          ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
+          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
+          ipsdisp.println("No Username!");
       }
 
       https.end();
     } else {
       Serial.printf("[HTTPS] Unable to connect\n");
+
+          ipsdisp.fillScreen(TFT_ORANGE);
+          ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
+          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
+          ipsdisp.println("No Internet!");
     }
   }
   Serial.println();

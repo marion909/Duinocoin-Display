@@ -1,198 +1,145 @@
-/*
- *Display images on ST7789 IPS module sketch
- *Made by wiztaqnia.com
- *Modified date: 18/04/2022
- *Typical pin layout used:
- * ---------------------------------------------
- * Signal               ST7789 IPS    ESP8266
- *                      Module        Interface
- *                      Pin           Pin
- * ---------------------------------------------
- * VCC(3.3V)            VCC           3V3
- * GND(Ground)          GND           GND
- * SDA(Serial Data)     DIN           D7(MOSI)
- * SLK(Serial Clock)    CLK           D5(SCLK)
- * CS(Chip Select)      CS            D8(CS)
- * DC(Data/Command)     DC            D0
- * RST(Reset)           RST           D1
- * BL(Backlight)        BL            D2
-  */
-
 #include <TFT_eSPI.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClientSecureBearSSL.h>
 #include <ArduinoJson.h>
 #include "logo.h"
+#include "configuration.h"
 
-const char* ssid = "YOUR_WIFI_NAME";
-const char* password = "YOUR_WIFI_PASSWORD";
+TFT_eSPI ipsdisp = TFT_eSPI();
 
-
-String serverName = "https://server.duinocoin.com/users/";
-String username = "YOUR_DUINOCOIN_USERNAME";
-
-unsigned long lastTime = 0;
-unsigned long timerDelay = 5000;
-
-
-TFT_eSPI ipsdisp= TFT_eSPI();           
+double lastBalance = -1.0;
+int lastMinerCount = -1;
+double lastTotalHashrate = -1.0;
+int lastDifficulty = -1;
+double lastMaxAccepted = -1.0;
 
 void setup() {
- Serial.begin(115200);        //Initialise UART COmmunication with 115200 bits/s Baud Rate
-  WiFi.begin(ssid, password);
+  Serial.begin(115200);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.println("Connecting");
 
- ipsdisp.begin();             //Initiatise SPI Bus
- ipsdisp.init();              //Initialise ST7789
- ipsdisp.setRotation(1);      //Value 1 means landescape mode; Value 2 means potrait mode
- ipsdisp.setSwapBytes(true);  //Swap the byte order for pushImage() - corrects endianness
+  ipsdisp.begin();
+  ipsdisp.init();
+  ipsdisp.setRotation(1);
+  ipsdisp.setSwapBytes(true);
 
- //wait for wlan
-
-  while(WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
     ipsdisp.fillScreen(TFT_ORANGE);
-    ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-    ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-    ipsdisp.println("No WLAN! - Wifi is Connecting...");
+    displayMessage("Kein WLAN!", 10);
   }
 
-//boot screen
-
- ipsdisp.fillScreen(TFT_WHITE);
- ipsdisp.pushImage(40,0,240,240,myGraphic);
- delay(10000); 
- ipsdisp.fillScreen(TFT_ORANGE);
+  ipsdisp.fillScreen(TFT_WHITE);
+  ipsdisp.pushImage(40, 0, 240, 240, myGraphic);
+  delay(5000);
+  ipsdisp.fillScreen(TFT_ORANGE);
 }
 
 void loop() {
-// wait for WiFi connection
-  if ((WiFi.status() == WL_CONNECTED)) {
-    std::unique_ptr<BearSSL::WiFiClientSecure>client(new BearSSL::WiFiClientSecure);
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure secured_client;
+    secured_client.setInsecure();
 
-    // Ignore SSL certificate validation
-    client->setInsecure();
-    
-    //create an HTTPClient instance
     HTTPClient https;
-    
-    //Initializing an HTTPS communication using the secure client
+
     Serial.print("[HTTPS] begin...\n");
-    if (https.begin(*client, serverName + username)) {  // HTTPS
+    String serverUrl = String(DUCO_SERVER) + DUCO_USERNAME;
+if (https.begin(secured_client, serverUrl)) {
+
       Serial.print("[HTTPS] GET...\n");
-      // start connection and send HTTP header
       int httpCode = https.GET();
-      // httpCode will be negative on error
+
       if (httpCode > 0) {
-        // HTTP header has been send and Server response header has been handled
         Serial.printf("[HTTPS] GET... code: %d\n", httpCode);
-        // file found at server
+
         if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
           String payload = https.getString();
-          
+
           DynamicJsonDocument doc(2048);
           DeserializationError error = deserializeJson(doc, payload);
 
-           if (error) {
-      Serial.print(F("Fehler beim Parsen: "));
-      Serial.println(error.c_str());
-      return;
-    }
+          if (error) {
+            Serial.print(F("Fehler beim Parsen: "));
+            Serial.println(error.c_str());
+            return;
+          }
 
-    double balance = doc["result"]["balance"]["balance"];
+          double balance = doc["result"]["balance"]["balance"];
+          double totalHashrate = 0.0;
+          int difficulty = 0;
+          double maxAccepted = 0.0;
+          int minerCount = 0;
 
-Serial.print(F("Balance: "));
-    Serial.println(balance);
+          if (minerCount < DUCO_MINER) {
+            int diff = DUCO_MINER - minerCount;
+            String message = "Achtung! " + String(diff) + " Miner sind offline.";
 
-      // Summe der Hashraten aller Miner
-    double totalHashrate = 0.0;
-    int minerCount = 0;
-    int difficulty = 0;
-     double maxAccepted = 0.0;
+          }
 
+          JsonArray miners = doc["result"]["miners"];
+          for (JsonObject miner : miners) {
+            double hashrate = miner["hashrate"];
+            totalHashrate += hashrate;
+            difficulty = miner["diff"];
+            int accepted = miner["accepted"];
 
-  // Schleife durch alle Miner
-  JsonArray miners = doc["result"]["miners"];
-  for (JsonObject miner : miners) {
-    double hashrate = miner["hashrate"];
-    totalHashrate += hashrate;
-    difficulty = miner["diff"];
-    int accepted = miner["accepted"];
+            if (accepted > maxAccepted) {
+              maxAccepted = accepted;
+            }
 
+            minerCount++;
+            Serial.println(difficulty);
+          }
 
-    if (accepted > maxAccepted) {
-          maxAccepted = accepted;
-          
+          totalHashrate /= 1000.0;
+
+          // Überprüfen, ob sich Werte geändert haben, bevor das Display aktualisiert wird
+          if (balance != lastBalance || minerCount != lastMinerCount ||
+              totalHashrate != lastTotalHashrate || difficulty != lastDifficulty ||
+              maxAccepted != lastMaxAccepted) {
+            displayInfo(balance, minerCount, totalHashrate, difficulty, maxAccepted);
+
+            // Aktualisiere die letzten bekannten Werte
+            lastBalance = balance;
+            lastMinerCount = minerCount;
+            lastTotalHashrate = totalHashrate;
+            lastDifficulty = difficulty;
+            lastMaxAccepted = maxAccepted;
+          }
+
+        } else {
+          Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+          displayMessage("Kein Benutzer oder HTTP-Fehler!", 10);
         }
 
-    minerCount++;
-    Serial.println(difficulty);
-
-  }
-    totalHashrate /= 1000.0;
-          ipsdisp.fillScreen(TFT_ORANGE);
-          ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("User: " + String(username));
-
-
-          ipsdisp.setCursor(10,40,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("Balance: " + String(balance) + " Duco");
-
-
-          ipsdisp.setCursor(10,70,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("Miner: " + String(minerCount));
-
-
-          ipsdisp.setCursor(10,100,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("Hash: " + String(totalHashrate) + " kH/s");
-
-
-          ipsdisp.setCursor(10,130,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("Difficulty: " + String(difficulty));
-
-
-          ipsdisp.setCursor(10,160,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("Max Shares: " + String(maxAccepted));
-
-
-          ipsdisp.setCursor(10,190,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("IP: " + WiFi.localIP().toString());
-
-        }
+        https.end();
       } else {
-        Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
-
-                  ipsdisp.fillScreen(TFT_ORANGE);
-          ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("No Username!");
+        Serial.printf("[HTTPS] Verbindung fehlgeschlagen\n");
+        displayMessage("Kein Internet!", 10);
       }
-
-      https.end();
-    } else {
-      Serial.printf("[HTTPS] Unable to connect\n");
-
-          ipsdisp.fillScreen(TFT_ORANGE);
-          ipsdisp.setCursor(10,10,4);               //ipsdisp.setCurser(x axis,y axis,text font style i.e 1/2/4/6)
-          ipsdisp.setTextColor(TFT_WHITE); //ipsdisp.setTextColor(text color,text background color)
-          ipsdisp.println("No Internet!");
     }
   }
+
   Serial.println();
-  Serial.println("Waiting 10sec before the next round...");
+  Serial.println("Warte 10 Sekunden vor der nächsten Runde...");
   delay(10000);
-
-
-
 }
 
-        
+void displayInfo(double balance, int minerCount, double totalHashrate, int difficulty, double maxAccepted) {
+  ipsdisp.fillScreen(TFT_ORANGE);
+  displayMessage("Benutzer: " + String(DUCO_USERNAME), 10);
+  displayMessage("Guthaben: " + String(balance) + " Duco", 40);
+  displayMessage("Miner: " + String(minerCount), 70);
+  displayMessage("Hashrate: " + String(totalHashrate) + " kH/s", 100);
+  displayMessage("Schwierigkeit: " + String(difficulty), 130);
+  displayMessage("Max. Akzeptiert: " + String(maxAccepted), 160);
+  displayMessage("IP: " + WiFi.localIP().toString(), 190);
+}
+
+void displayMessage(const String &message, int yPos) {
+  ipsdisp.setCursor(10, yPos, 4);
+  ipsdisp.setTextColor(TFT_WHITE);
+  ipsdisp.println(message);
+}
